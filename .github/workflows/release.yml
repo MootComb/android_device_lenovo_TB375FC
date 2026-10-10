@@ -1,0 +1,121 @@
+name: Build Infinity-X TB375FC
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [infinity-16]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Free disk space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          swap-size-mb: 16384
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+
+      - name: Checkout device tree
+        uses: actions/checkout@v4
+        with:
+          path: device/lenovo/TB375FC
+          ref: infinity-16
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y bc bison build-essential ccache curl flex \
+            g++-multilib gcc-multilib git gnupg gperf imagemagick \
+            lib32ncurses5-dev lib32readline-dev lib32z1-dev libelf-dev \
+            liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev \
+            libssl-dev libxml2 libxml2-utils lzop pngcrush rsync \
+            schedtool squashfs-tools xsltproc zip zlib1g-dev openjdk-11-jdk \
+            python3 python3-pip git-lfs
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-infinity-${{ github.sha }}
+          restore-keys: |
+            ccache-infinity-
+
+      - name: Install repo
+        run: |
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Init & Sync
+        run: |
+          repo init --no-repo-verify --git-lfs -u https://github.com/ProjectInfinity-X/manifest -b 17 -g default,-mips,-darwin,-notdefault
+
+          mkdir -p .repo/local_manifests
+          cat > .repo/local_manifests/TB375FC.xml << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <manifest>
+            <project name="ajnetworksa/android_device_lenovo_TB375FC" path="device/lenovo/TB375FC" remote="github" revision="infinity-16" />
+            <project name="LosSantosPro/android_vendor_lenovo_TB375FC" path="vendor/lenovo/TB375FC" remote="github" revision="lineage-23.2" />
+          </manifest>
+          EOF
+
+          repo sync -c --no-clone-bundle --no-tags --optimized-fetch --prune --force-sync -j$(nproc --all)
+
+      - name: Download prebuilts
+        run: |
+          echo "Put your APK download logic here"
+
+      - name: Build
+        run: |
+          source build/envsetup.sh
+          lunch infinity_TB375FC-bp4a-userdebug
+          m bacon -j$(nproc --all)
+
+      - name: Generate tag
+        id: tag
+        run: |
+          DATE=$(date +%Y%m%d)
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          RUN_NUMBER=${{ github.run_number }}
+          TAG="infinity-16-TB375FC-${DATE}-${SHORT_SHA}-r${RUN_NUMBER}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Generated tag: ${TAG}"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Infinity-X TB375FC ${{ steps.tag.outputs.tag }}
+          body: |
+            Automated Infinity-X build release for Lenovo TB375FC
+
+            **Build Information:**
+            - Branch: infinity-16
+            - Commit: ${{ github.sha }}
+            - Date: ${{ github.event.head_commit.timestamp }}
+            - Build Number: ${{ github.run_number }}
+
+            **Device:** Lenovo TB375FC
+            **Android:** 16 (BP4A)
+            **Build Type:** userdebug
+          draft: false
+          prerelease: false
+          files: out/target/product/TB375FC/*.zip
+
+      - name: Upload ROM artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Infinity-X-TB375FC
+          path: out/target/product/TB375FC/*.zip
+          retention-days: 7
